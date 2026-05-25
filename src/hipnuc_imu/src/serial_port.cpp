@@ -74,7 +74,16 @@ namespace hipnuc_driver
 				RCLCPP_INFO(this->get_logger(), "imu_switch: %d\r\n", imu_switch);
 				RCLCPP_INFO(this->get_logger(), "euler_switch: %d\r\n", euler_switch);
 				RCLCPP_INFO(this->get_logger(), "magnetic_switch: %d\r\n", magnetic_switch);
-				
+
+				// EKF: high confidence on yaw (index 8); roll/pitch unused in two_d_mode
+				for (int i = 0; i < 9; ++i) {
+					imu_msg.orientation_covariance[i] = -1.0;
+					imu_msg.angular_velocity_covariance[i] = -1.0;
+				}
+				// 100 Hz 9-DOF AHRS yaw (~4 deg std); vyaw unused in EKF
+				imu_msg.orientation_covariance[8] = 0.006;
+				imu_msg.angular_velocity_covariance[8] = -1.0;
+
 				imu_pub = this->create_publisher<sensor_msgs::msg::Imu>(imu_topic, rclcpp::SensorDataQoS());
 				euler_pub = this->create_publisher<geometry_msgs::msg::Vector3Stamped>(euler_topic, rclcpp::SensorDataQoS());
 				magnetic_pub = this->create_publisher<sensor_msgs::msg::MagneticField>(magnetic_topic, rclcpp::SensorDataQoS());

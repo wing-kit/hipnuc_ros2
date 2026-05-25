@@ -25,6 +25,7 @@ def generate_launch_description():
                        emulate_tty=True,
                        parameters=[parameter_file],
                        )
+    # Lidar at robot center (base_link); z = 2 cm mount height
     tf2_node = Node(package='tf2_ros',
                     executable='static_transform_publisher',
                     name='static_tf_pub_laser',

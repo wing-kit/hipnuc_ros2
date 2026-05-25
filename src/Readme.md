@@ -14,6 +14,8 @@
 | `hipnuc_gnss` | GNSS / INS 串口 → `Imu` + `NavSatFix` |
 | `hipnuc_imu_can` | CAN 介面 IMU（選用） |
 | `nvilidar_ros2` | NVISTAR 2D 雷達（選用） |
+| `rf2o_laser_odometry` | 雷射掃描 2D 里程計（選用） |
+| `slam_toolbox`（系統套件） | 2D SLAM 建圖（選用，`hipnuc_imu` 提供 launch/config） |
 
 ## 安裝 USB-UART 驅動
 
@@ -159,10 +161,10 @@ linear_acceleration:
   ...
 ```
 
-另開終端機查看話題頻率（注意大小寫）：
+另開終端機查看話題頻率（注意大小寫；IMU 須使用 **Best Effort**，見下方 [QoS：Best Effort](#qosbest-effort)）：
 
 ```shell
-ros2 topic hz /IMU_data
+ros2 topic hz /IMU_data --qos-profile sensor_data
 ```
 
 ```shell
@@ -202,6 +204,210 @@ ros2 launch hipnuc_imu imu_lidar_bringup.launch.py
 
 可選：`imu_listener:=true` 開啟 IMU 示範列印。
 
+查看雷達掃描（須 **Best Effort**）：
+
+```shell
+ros2 topic hz /scan --qos-profile sensor_data
+```
+
+### 雷射里程計（RF2O）+ IMU 融合（EKF）
+
+`imu_lidar_bringup.launch.py` 預設啟動：
+
+| 節點 | 輸入 | 輸出 |
+|------|------|------|
+| `rf2o_laser_odometry` | `/scan` | `/odom`（雷射里程，不發 TF） |
+| `ekf_filter_node` | `/odom` + `/IMU_data` | `/odometry/filtered`、TF `odom`→`base_link` |
+
+需已安裝：`sudo apt install ros-humble-robot-localization`
+
+參數檔：
+
+- EKF：`hipnuc_imu/config/ekf.yaml`（**100 Hz IMU + 10 Hz 雷射** 建議值，見檔頭註解）
+- RF2O（EKF 模式）：`rf2o_laser_odometry/config/rf2o_params_ekf.yaml`（`publish_tf: false`）
+
+**建議融合分工（2D）**
+
+| 量 | 率 | 來源 | 說明 |
+|----|-----|------|------|
+| x, y | 10 Hz | RF2O | 平面位置主來源 |
+| vx, vy | 10 Hz | RF2O twist | 介於兩次 scan 之間由 EKF 預測 |
+| yaw | 100 Hz + 10 Hz | IMU AHRS + RF2O | IMU 為主；不融合 **vyaw**（靜止陀螺易飄） |
+| 9-DOF 加速度 | — | 不進 EKF | `two_d_mode` 下不用 accel 推位置 |
+
+**量測協方差（愈小愈信任）**：IMU `orientation_covariance[8]=0.006`；RF2O `pose[0,7]=0.01`、`pose[35]=0.12`。
+
+**快速調參**
+
+| 現象 | 調整 |
+|------|------|
+| 靜止航向飄 | 勿開 vyaw；RF2O `pose[35]` 加大；yaw `process_noise` 勿 > 0.1 |
+| 轉彎與牆不符 | RF2O `pose[35]` 減小（如 `0.06`） |
+| 位置跳 | RF2O `pose[0,7]` 加大 |
+| 輸出延遲 | 保持 `frequency:100`、`predict_to_current_time:true` |
+
+僅啟動 EKF：
+
+```shell
+ros2 launch hipnuc_imu ekf_localization.launch.py
+```
+
+僅 RF2O（自帶 TF，不融合 IMU）：
+
+```shell
+ros2 launch rf2o_laser_odometry rf2o_laser_odometry.launch.py
+```
+
+關閉 EKF、僅用 RF2O 發布 TF：
+
+```shell
+ros2 launch hipnuc_imu imu_lidar_bringup.launch.py enable_ekf:=false \
+  rf2o_params_file:=$(ros2 pkg prefix rf2o_laser_odometry)/share/rf2o_laser_odometry/config/rf2o_params.yaml
+```
+
+關閉里程計（僅 IMU + 雷達）：
+
+```shell
+ros2 launch hipnuc_imu imu_lidar_bringup.launch.py enable_odom:=false enable_ekf:=false
+```
+
+查看融合里程計：
+
+```shell
+ros2 topic echo /odometry/filtered --once
+ros2 topic hz /odometry/filtered
+```
+
+### RViz：2D 里程 + IMU 三維姿態
+
+RF2O / EKF 輸出為 **平面**（x, y, yaw）。**完整 3D 姿態**來自 `/IMU_data` 的 `orientation`（四元數），可在 RViz 顯示：
+
+| 顯示 | 內容 |
+|------|------|
+| **Imu** | `/IMU_data`：三軸姿態 + 角速度/加速度箭頭 |
+| **TF** | `imu_link` 相對 `base_link` 的 3D 座標軸 |
+| **Odometry** | `/odometry/filtered`：僅 2D 軌跡 |
+
+一鍵啟動 bringup + RViz：
+
+```shell
+ros2 launch hipnuc_imu imu_lidar_bringup_view.launch.py
+```
+
+已在跑 bringup 時，另開終端：
+
+```shell
+rviz2 -d $(ros2 pkg prefix hipnuc_imu)/share/hipnuc_imu/config/imu_lidar.rviz
+```
+
+手動添加顯示時，**Imu**（`/IMU_data`）與 **LaserScan**（`/scan`）的 Topic → **Reliability** 均須選 **Best Effort**（詳見 [QoS：Best Effort](#qosbest-effort)）。**Fixed Frame** 設 `base_link` 或 `odom`；視角用 **Orbit** 可旋轉查看 3D。
+
+查看原始四元數：
+
+```shell
+ros2 topic echo /IMU_data --field orientation --qos-profile sensor_data
+```
+
+### SLAM（slam_toolbox）
+
+需已安裝：
+
+```shell
+sudo apt install ros-humble-slam-toolbox
+```
+
+**TF 鏈**（建圖時）：
+
+```text
+map → odom → base_link → laser_frame
+              └→ imu_link
+```
+
+- `odom`→`base_link`：EKF（`/odometry/filtered`）
+- `map`→`odom`：slam_toolbox（閉環修正）
+- 輸入：`/scan`（Best Effort）、既有里程 TF
+
+**一鍵啟動**（感測 + RF2O + EKF + SLAM）：
+
+```shell
+ros2 launch hipnuc_imu imu_lidar_slam.launch.py
+```
+
+**不含 IMU**（僅雷達 + RF2O 里程 + SLAM，RF2O 發布 `odom`→`base_link` TF）：
+
+```shell
+ros2 launch hipnuc_imu lidar_slam.launch.py
+```
+
+**不含 IMU + RViz**：
+
+```shell
+ros2 launch hipnuc_imu lidar_slam_view.launch.py
+```
+
+亦可沿用 bringup 關閉 IMU/EKF（需手動再開 SLAM）：
+
+```shell
+ros2 launch hipnuc_imu imu_lidar_bringup.launch.py enable_imu:=false enable_ekf:=false
+# 另開終端
+ros2 launch hipnuc_imu slam_toolbox.launch.py
+```
+
+**含 RViz 地圖（含 IMU）**（Fixed Frame = `map`）：
+
+```shell
+ros2 launch hipnuc_imu imu_lidar_slam_view.launch.py
+```
+
+僅啟動 SLAM（需另開終端已跑 `imu_lidar_bringup.launch.py`）：
+
+```shell
+ros2 launch hipnuc_imu slam_toolbox.launch.py
+```
+
+參數檔：`hipnuc_imu/config/slam_toolbox.yaml`（`base_link`、`/scan`、`max_laser_range: 30` 等，可依環境調整）。
+
+儲存地圖：
+
+```shell
+ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: {data: 'my_map'}}"
+```
+
+查看地圖話題：
+
+```shell
+ros2 topic hz /map
+```
+
+> 建圖時請**緩慢移動**機器人，讓 RF2O/EKF 與 SLAM 同步；若 `/map` 空白，先確認 `ros2 run tf2_tools view_frames` 中 `map`→`odom`→`base_link`→`laser_frame` 完整。
+
+**日誌出現 `Message Filter dropping message ... queue is full`**：slam_toolbox 在處理 `/scan` 前無法及時取得 `odom`→`base_link`（或 `base_link`→`laser_frame`）TF，掃描會被全部丟棄、無法建圖。本 repo 已在 `slam_toolbox.yaml` 調高 `transform_timeout`、`scan_queue_size`，並將 `transform_publish_period` 設為 `0.1`（避免過頻發 TF 拖慢掃描處理）；SLAM 節點預設延遲 2 秒啟動。請重新 `colcon build` 後再跑 `lidar_slam_view.launch.py`。
+
+### QoS：Best Effort
+
+本工作空間的 **IMU** 與 **雷達** 感測話題均以 `SensorDataQoS` 發布，對應 **Reliability = Best Effort**（適合高頻、可丟帧的感測資料）。
+
+| 話題 | 訊息類型 | 發布端 QoS |
+|------|----------|------------|
+| `/IMU_data` | `sensor_msgs/Imu` | Best Effort |
+| `/scan` | `sensor_msgs/LaserScan` | Best Effort |
+
+`ros2 topic echo` / `ros2 topic hz` 預設常為 **Reliable**，與上述話題不相容時會**收不到資料**，或節點日誌出現 `RELIABILITY_QOS_POLICY` 警告。訂閱時請加上：
+
+```shell
+# 等同於 --qos-reliability best_effort
+ros2 topic echo /IMU_data --qos-profile sensor_data
+ros2 topic echo /scan --qos-profile sensor_data
+ros2 topic hz /IMU_data --qos-profile sensor_data
+ros2 topic hz /scan --qos-profile sensor_data
+```
+
+**RViz2**：在 **Imu**（`/IMU_data`）與 **LaserScan**（`/scan`）顯示的 Topic 設定中，將 **Reliability Policy** 設為 **Best Effort**（勿用預設 Reliable）。本 repo 的 `imu_lidar.rviz` 已預設 Best Effort。
+
+**節點訂閱**：`rf2o_laser_odometry` 已對齊 `/scan` 的 Best Effort；`robot_localization` 的 EKF 訂閱 `/IMU_data` 時由套件內部處理，一般無需手動設定。
+
+> **Odometry**（`/odom`、`/odometry/filtered`）多為 **Reliable**，與感測話題不同；在 RViz 的 Odometry 顯示可維持 Reliable。
+
 ## 常見問題
 
 | 現象 | 處理方式 |
@@ -210,3 +416,8 @@ ros2 launch hipnuc_imu imu_lidar_bringup.launch.py
 | 無法開啟串口 | 加入 `dialout` 或使用 `chmod` / udev 規則 |
 | 無 `/IMU_data` 資料 | 確認 `imu_switch: true`、鮑率與模組一致 |
 | launch 找不到套件 | `source /opt/ros/humble/setup.bash` 與 `install/setup.bash` |
+| `/scan` 有資料但無 `/odom` | 確認 `enable_odom:=true`；先確認能 `ros2 topic hz /scan --qos-profile sensor_data` |
+| 收不到 `/IMU_data` 或 `/scan` | 訂閱須 **Best Effort**：`--qos-profile sensor_data`（見 [QoS：Best Effort](#qosbest-effort)） |
+| QoS 不相容警告 | RViz / `ros2 topic` 對 `/IMU_data`、`/scan` 均改為 **Best Effort**，勿用 Reliable |
+| SLAM 無 `/map` 或 TF 斷裂 | `lidar_slam` 不需 EKF；確認 RF2O 發布 `odom`→`base_link`；`ros2 topic hz /scan --qos-profile sensor_data`；若日誌為 queue full，見上文 SLAM 故障排除 |
+| RViz 看不到雷射/地圖 | `lidar_slam.rviz` 固定座標為 `odom`；`/scan` 須 **Best Effort**；有 `/map` 後可改 Fixed Frame 為 `map` |
