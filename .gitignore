@@ -1,0 +1,19 @@
+# ROS 2 / colcon workspace
+build/
+install/
+log/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# CMake / compile artifacts in source trees
+**/CMakeFiles/
+**/.cmake/
