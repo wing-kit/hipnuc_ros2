@@ -164,7 +164,7 @@ pgrep -af 'ros2|talker|nvilidar|ekf_node|slam_toolbox|rf2o|static_transform' | g
 
 | 現象 | 處理 |
 |------|------|
-| `Failed to get Lidar Device Info` | 有舊 node 霸住個串口 → 先清場（第 5 節）；唔得就 USB reset（下面） |
+| `Failed to get Lidar Device Info` / `Lidar Data Invalid` | 有舊 node 霸住個串口 → 先清場（第 5 節）；如果反覆 kill/重開後 LiDAR 仲係唔醒 → USB reset（下面） |
 | `/dev/nvilidar` 或 `/dev/hipnuc_imu` 唔見咗 | `lsusb` 睇裝置在唔在；重插 USB；udev 規則已裝好唔使再裝 |
 | 收唔到 `/IMU_data` / `/scan` | 加 `--qos-reliability best_effort`（第 4 節） |
 | SLAM 冇 `/map`、log 話 `queue is full` | 確認 RF2O/EKF 有出 `odom→base_link` TF：`ros2 run tf2_ros tf2_echo odom base_link` |
