@@ -141,7 +141,22 @@ pkill -f 'ros2 launch'; sleep 1
 pkill -9 -f nvilidar_ros2_node; pkill -9 -f async_slam_toolbox
 pkill -9 -f rf2o_laser_odometry; pkill -9 -f robot_localization
 pkill -9 -f 'hipnuc_imu/lib/hipnuc_imu/talker'
+pkill -9 -f static_transform_publisher
 ```
+
+一鑊熟冧巴快版（連 launch、node、static TF 全部清晒）：
+
+```bash
+pkill -9 -f 'ros2 launch|nvilidar_ros2_node|async_slam_toolbox|rf2o_laser_odometry|robot_localization|hipnuc_imu/talker|static_transform_publisher'
+```
+
+檢查有冇殘留：
+
+```bash
+pgrep -af 'ros2|talker|nvilidar|ekf_node|slam_toolbox|rf2o|static_transform' | grep -v pgrep
+```
+
+> ℹ️ 見到 `ros2-daemon`（`ros2cli.daemon.daemonize`）唔使驚，係 `ros2` CLI 嘅背景 daemon，唔霸串口。想停都可以用 `ros2 daemon stop`。
 
 ---
 
